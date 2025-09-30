@@ -1,0 +1,93 @@
+-- NOTE:
+-- - Execute these statements against your PostgreSQL instance for database "company_chatbot_db".
+-- - If you maintain connection helpers, consult db_connection.txt if present for connection strings.
+-- - The backend's SQLAlchemy models currently cover users/messages/conversations; this schema focuses on:
+--   users, chat_messages, documents for auth, chat history, and RAG docs as requested.
+
+-- 1) Enable pgvector extension if available (safe to run; requires superuser or appropriate privileges)
+--    This allows a true vector column for embeddings. If not available, skip it and use bytea fallback defined below.
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- 2) Create users table (authentication)
+CREATE TABLE IF NOT EXISTS public.users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email           CITEXT NOT NULL UNIQUE, -- case-insensitive unique emails
+    hashed_password TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 3) Create chat_messages table (chat history)
+--    We keep a simple relation to users without conversation grouping per the request.
+CREATE TABLE IF NOT EXISTS public.chat_messages (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    message     TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Helpful index to query messages by user and recency
+CREATE INDEX IF NOT EXISTS ix_chat_messages_user_created_at
+    ON public.chat_messages (user_id, created_at DESC);
+
+-- 4) Create documents table (RAG source documents)
+--    Embedding column uses pgvector if available. We assume a common embedding dimension (e.g., 384).
+--    If your embedding dimension differs, adjust the vector(N) below.
+DO $$
+BEGIN
+    -- Attempt to create with pgvector column
+    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
+        -- Using dimension 384 by default to align with backend default; update if needed.
+        EXECUTE '
+            CREATE TABLE IF NOT EXISTS public.documents (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                title       TEXT NOT NULL,
+                content     TEXT NOT NULL,
+                embedding   vector(384), -- requires pgvector
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        ';
+        -- Create HNSW or IVFFlat index depending on preference; here we use HNSW cosine distance if supported.
+        -- If your Postgres/pgvector version lacks HNSW, replace with IVFFlat and build index after data load.
+        BEGIN
+            EXECUTE 'CREATE INDEX IF NOT EXISTS ix_documents_embedding_hnsw ON public.documents USING hnsw (embedding vector_cosine_ops)';
+        EXCEPTION
+            WHEN others THEN
+                -- Fallback to IVFFlat if HNSW not available
+                PERFORM 1;
+                BEGIN
+                    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_documents_embedding_ivfflat ON public.documents USING ivfflat (embedding vector_cosine_ops)';
+                EXCEPTION
+                    WHEN others THEN
+                        -- If index creation fails, proceed without a vector index
+                        PERFORM 1;
+                END;
+        END;
+    ELSE
+        -- Fallback: use BYTEA for serialized embedding if pgvector is unavailable
+        EXECUTE '
+            CREATE TABLE IF NOT EXISTS public.documents (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                title       TEXT NOT NULL,
+                content     TEXT NOT NULL,
+                embedding   BYTEA, -- store serialized vectors (e.g., float32 array) if pgvector is not installed
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        ';
+    END IF;
+END
+$$;
+
+-- Helpful standard indexes
+CREATE INDEX IF NOT EXISTS ix_documents_created_at ON public.documents (created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_users_created_at ON public.users (created_at DESC);
+
+-- 5) Support functions and extensions for gen_random_uuid() and citext
+--    Ensure required extensions exist; safe to run if already enabled.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS citext;
+
+-- 6) Optional: comment hints
+COMMENT ON TABLE public.users IS 'Application users for authentication (email unique, hashed_password stored)';
+COMMENT ON COLUMN public.users.hashed_password IS 'BCrypt/Argon2 or other salted hash (never store plain text)';
+COMMENT ON TABLE public.chat_messages IS 'Flat chat history table linking messages to users';
+COMMENT ON TABLE public.documents IS 'RAG source documents with optional vector embeddings for semantic search';
