@@ -6,7 +6,8 @@ from fastapi import FastAPI, Depends, HTTPException, status, Path, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi import APIRouter
-from pydantic import BaseModel, Field, EmailStr, BaseSettings
+from pydantic import BaseModel, Field, EmailStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Import rag_core utilities and shared stores to avoid circular imports
 from .rag_core import (
@@ -40,9 +41,8 @@ class Settings(BaseSettings):
     # Embeddings/LLM (simulated here)
     EMBEDDING_DIM: int = 384
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    # Pydantic v2 settings configuration
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 settings = Settings()
