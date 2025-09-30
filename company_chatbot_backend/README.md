@@ -2,7 +2,7 @@
 
 Ocean Professional themed backend providing:
 - Authentication (signup, token, me)
-- Chat with simple Agentic reasoning using RAG contexts
+- Chat with Agentic reasoning using RAG contexts and OpenAI LLM (fallback to heuristic if OpenAI not configured)
 - RAG document ingest and FAISS-like semantic search (with in-memory fallback)
 - PostgreSQL integration (SQLAlchemy) ready for persistence
 
@@ -21,6 +21,15 @@ Notes:
 - FAISS is optional; the app falls back to an in-memory cosine similarity.
 - DB models are provided but routes currently use in-memory storage for simplicity.
 - Migrations are not included; integrate Alembic for production.
+
+OpenAI integration:
+- The backend detects OPENAI_API_KEY from environment to call OpenAI Chat Completions for RAG+Agentic responses.
+- If OPENAI_API_KEY is missing or invalid, the /chat/messages endpoint gracefully falls back to a heuristic answer synthesized from retrieved contexts.
+- Configure the following environment variables in your .env:
+  - OPENAI_API_KEY: Your OpenAI key. Required for LLM-powered answers.
+  - OPENAI_MODEL: Default model (e.g., gpt-4o-mini). Optional.
+  - OPENAI_BASE_URL: Base URL for the API (default https://api.openai.com/v1). Optional.
+- Security: The key is never logged or hardcoded and is read only from the environment.
 
 Host and CORS configuration:
 - To avoid "Invalid Host header" errors in preview or non-production environments, set:

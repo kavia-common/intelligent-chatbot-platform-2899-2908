@@ -19,6 +19,8 @@ from .rag_core import (
     embed_text,
     THEME_META as CORE_THEME_META,
 )
+# OpenAI integration
+from src.services.openai_client import openai_chat_completion, ensure_openai_key
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -58,6 +60,11 @@ class Settings(BaseSettings):
 
     # Embeddings/LLM (simulated here)
     EMBEDDING_DIM: int = 384
+
+    # OpenAI integration (documented; values taken from environment)
+    OPENAI_API_KEY: str = Field(default="", description="OpenAI API key (read from environment; required for LLM features)")
+    OPENAI_MODEL: str = Field(default="gpt-4o-mini", description="Default OpenAI model to use (override via OPENAI_MODEL)")
+    OPENAI_BASE_URL: str = Field(default="https://api.openai.com/v1", description="Base URL for OpenAI API (override via OPENAI_BASE_URL)")
 
     # Pydantic v2 settings configuration
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -316,7 +323,7 @@ def get_messages(session_id: str = Path(..., description="Conversation/session I
     return [Message(**m) for m in msgs]
 
 
-@chat_router.post("/messages", summary="Send Message", description="Send a message and receive assistant response with simple agentic reasoning over RAG contexts", response_model=List[Message])
+@chat_router.post("/messages", summary="Send Message", description="Send a message and receive assistant response with simple agentic reasoning over RAG contexts (uses OpenAI if API key configured, else falls back to heuristic).", response_model=List[Message])
 def send_message(payload: MessageCreate, user: Dict[str, Any] = Depends(get_current_user)):
     # Ensure session
     session_id = payload.session_id or str(uuid.uuid4())
@@ -339,12 +346,40 @@ def send_message(payload: MessageCreate, user: Dict[str, Any] = Depends(get_curr
     q_vec = embed_text(payload.content, settings.EMBEDDING_DIM)
     contexts = faiss_search(q_vec, top_k=3)
 
-    # 2) Simple reasoning: create a structured answer referencing top contexts
-    if contexts:
-        top_snippets = " ".join([c["text"][:200] for c in contexts])
-        answer = f"Based on company knowledge, here's a concise response:\n{top_snippets}\n\nSummary: The information above best matches your query."
-    else:
-        answer = "I could not find relevant information in the current knowledge base. Please provide more details."
+    # 2) Compose a prompt with contexts
+    context_text = "\n\n".join([f"- {c['text']}" for c in contexts]) if contexts else "No matching context found."
+    system_prompt = (
+        "You are a helpful company assistant. Use the provided context to answer concisely. "
+        "If the context does not include the answer, say you don't know."
+    )
+    user_prompt = f"Question: {payload.content}\n\nContext:\n{context_text}\n\nAnswer:"
+
+    # 3) Try OpenAI; if key missing/invalid, gracefully fallback to heuristic summary
+    answer: str
+    try:
+        ensure_openai_key()  # Raises if missing
+        oai_resp = openai_chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            model=settings.OPENAI_MODEL or None,
+            temperature=0.2,
+            max_tokens=400,
+        )
+        answer = oai_resp.get("content") or "I'm unable to generate a response at this time."
+    except Exception as e:
+        # Fallback heuristic response with contexts
+        if contexts:
+            top_snippets = " ".join([c["text"][:200] for c in contexts])
+            answer = (
+                "Based on company knowledge, here's a concise response:\n"
+                f"{top_snippets}\n\n"
+                "Summary: The information above best matches your query."
+            )
+        else:
+            answer = "I could not find relevant information in the current knowledge base. Please provide more details."
+        logger.warning(f"OpenAI unavailable or failed, fallback used: {e}")
 
     # Store assistant message
     asst_msg = {
