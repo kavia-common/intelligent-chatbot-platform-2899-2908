@@ -9,11 +9,13 @@ Ocean Professional themed backend providing:
 Run locally:
 1) Create .env from .env.example and set variables (SECRET_KEY, POSTGRES_URL, etc.)
 2) Install dependencies: pip install -r requirements.txt
-3) Start: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
-4) Docs: open http://localhost:8000/docs
+3) Start on port 3001:
+   - python -m src.api.server
+   - or: PORT=3001 uvicorn src.api.main:app --host 0.0.0.0 --port 3001
+4) Docs: open http://localhost:3001/docs
 
 OpenAPI is generated to interfaces/openapi.json via:
-python -m src.api.generate_openapi
+python -m src.api.generate_openAPI
 
 Notes:
 - FAISS is optional; the app falls back to an in-memory cosine similarity.

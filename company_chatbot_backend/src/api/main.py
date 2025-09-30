@@ -8,11 +8,14 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi import APIRouter
 from pydantic import BaseModel, Field, EmailStr, BaseSettings
 
-# Optional imports for FAISS and embeddings guarded to allow CI without native deps
-try:
-    import faiss  # type: ignore
-except Exception:  # pragma: no cover
-    faiss = None  # Will operate in in-memory fallback mode
+# Import rag_core utilities and shared stores to avoid circular imports
+from .rag_core import (
+    get_in_memory_stores,
+    faiss_search,
+    faiss_add,
+    embed_text,
+    THEME_META as CORE_THEME_META,
+)
 
 # PUBLIC_INTERFACE
 class Settings(BaseSettings):
@@ -45,20 +48,10 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # Theme metadata for Ocean Professional style embedded within API responses
-THEME_META = {
-    "theme": "Ocean Professional",
-    "colors": {
-        "primary": "#2563EB",
-        "secondary": "#F59E0B",
-        "success": "#F59E0B",
-        "error": "#EF4444",
-        "background": "#f9fafb",
-        "surface": "#ffffff",
-        "text": "#111827",
-    }
-}
+THEME_META = CORE_THEME_META
 
-from .lifespan import lifespan
+# Import lifespan after settings is defined to allow it to reference settings safely
+from .lifespan import lifespan  # noqa: E402
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -90,19 +83,12 @@ app.add_middleware(
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
-
-# --------------------------
-# In-memory data structures (replace with real DB models later)
-# --------------------------
-# Simulated "database"
-_DB_USERS: Dict[str, Dict[str, Any]] = {}  # key: email
-_DB_SESSIONS: Dict[str, Dict[str, Any]] = {}  # key: session_id
-_DB_MESSAGES: Dict[str, List[Dict[str, Any]]] = {}  # key: session_id
-_DB_DOCS: List[Dict[str, Any]] = []  # corpus for RAG
-_FAISS_INDEX = None
-_FAISS_VECS: List[List[float]] = []
-_FAISS_IDS: List[int] = []
-
+# References to shared in-memory stores
+_STORES = get_in_memory_stores()
+_DB_USERS: Dict[str, Dict[str, Any]] = _STORES["DB_USERS"]
+_DB_SESSIONS: Dict[str, Dict[str, Any]] = _STORES["DB_SESSIONS"]
+_DB_MESSAGES: Dict[str, List[Dict[str, Any]]] = _STORES["DB_MESSAGES"]
+_DB_DOCS: List[Dict[str, Any]] = _STORES["DB_DOCS"]
 
 # --------------------------
 # Models
@@ -216,71 +202,6 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
 
 
 # --------------------------
-# FAISS / Embedding utilities
-# --------------------------
-def _ensure_faiss_index():
-    global _FAISS_INDEX
-    if _FAISS_INDEX is not None:
-        return
-
-    dim = settings.EMBEDDING_DIM
-    if faiss is not None:  # pragma: no cover
-        _FAISS_INDEX = faiss.IndexFlatIP(dim)
-    else:
-        _FAISS_INDEX = "in-memory"  # fallback flag
-
-
-def _embed_text(text: str) -> List[float]:
-    # Simulated embedding (hash-based) to keep deterministic behavior in CI
-    import random
-    random.seed(hash(text) & 0xFFFFFFFF)
-    return [random.random() for _ in range(settings.EMBEDDING_DIM)]
-
-
-def _faiss_add(vec: List[float], meta: Dict[str, Any]) -> None:
-    _ensure_faiss_index()
-    idx = len(_FAISS_VECS)
-    _FAISS_VECS.append(vec)
-    _FAISS_IDS.append(idx)
-    _DB_DOCS.append({"id": idx, "text": meta.get("text", ""), "meta": meta})
-    # Real FAISS add if available
-    if faiss is not None:  # pragma: no cover
-        import numpy as np
-        v = np.array([vec], dtype="float32")
-        _FAISS_INDEX.add(v)
-
-
-def _faiss_search(vec: List[float], top_k: int) -> List[Dict[str, Any]]:
-    _ensure_faiss_index()
-    if faiss is not None:  # pragma: no cover
-        import numpy as np
-        q = np.array([vec], dtype="float32")
-        scores, idxs = _FAISS_INDEX.search(q, top_k)
-        results = []
-        for i, s in zip(idxs[0], scores[0]):
-            if i == -1:
-                continue
-            doc = next((d for d in _DB_DOCS if d["id"] == i), None)
-            if doc:
-                results.append({"id": i, "score": float(s), "text": doc["text"], "meta": doc["meta"]})
-        return results
-    else:
-        # fallback cosine similarity on in-memory vectors
-        from math import sqrt
-        def dot(a, b): return sum(x*y for x, y in zip(a, b))
-        def norm(a): return sqrt(sum(x*x for x in a))
-        qn = norm(vec) or 1.0
-        scored = []
-        for i, v in enumerate(_FAISS_VECS):
-            s = dot(vec, v) / (qn * (norm(v) or 1.0))
-            doc = next((d for d in _DB_DOCS if d["id"] == i), None)
-            if doc:
-                scored.append({"id": i, "score": float(s), "text": doc["text"], "meta": doc["meta"]})
-        scored.sort(key=lambda x: x["score"], reverse=True)
-        return scored[:top_k]
-
-
-# --------------------------
 # Routers
 # --------------------------
 health_router = APIRouter(tags=["health"])
@@ -373,8 +294,8 @@ def send_message(payload: MessageCreate, user: Dict[str, Any] = Depends(get_curr
 
     # Basic agentic flow:
     # 1) Retrieve contexts via RAG
-    q_vec = _embed_text(payload.content)
-    contexts = _faiss_search(q_vec, top_k=3)
+    q_vec = embed_text(payload.content, settings.EMBEDDING_DIM)
+    contexts = faiss_search(q_vec, top_k=3)
 
     # 2) Simple reasoning: create a structured answer referencing top contexts
     if contexts:
@@ -405,16 +326,16 @@ def ingest_documents(docs: List[Dict[str, str]] = Body(..., description="List of
         text = d.get("text", "").strip()
         if not text:
             continue
-        vec = _embed_text(text)
-        _faiss_add(vec, {"text": text, "source": d.get("source", "manual")})
+        vec = embed_text(text, settings.EMBEDDING_DIM)
+        faiss_add(vec, {"text": text, "source": d.get("source", "manual")}, settings.EMBEDDING_DIM)
         count += 1
     return {"ingested": count, "meta": THEME_META}
 
 
 @rag_router.post("/search", summary="Semantic Search", description="Search the FAISS index for semantically similar passages", response_model=RAGResponse)
 def semantic_search(payload: RAGQuery, user: Dict[str, Any] = Depends(get_current_user)):
-    vec = _embed_text(payload.query)
-    results = _faiss_search(vec, payload.top_k)
+    vec = embed_text(payload.query, settings.EMBEDDING_DIM)
+    results = faiss_search(vec, payload.top_k)
     # simple answer
     if results:
         combined = " ".join([r['text'] for r in results])
