@@ -1,8 +1,9 @@
 import uuid
+import logging
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, Depends, HTTPException, status, Path, Body
+from fastapi import FastAPI, Depends, HTTPException, status, Path, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -18,6 +19,8 @@ from .rag_core import (
     embed_text,
     THEME_META as CORE_THEME_META,
 )
+
+logger = logging.getLogger("uvicorn.error")
 
 # PUBLIC_INTERFACE
 class Settings(BaseSettings):
@@ -87,7 +90,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# Log ALLOWED_HOSTS at startup for diagnostics
+logger.info(f"Startup: ALLOWED_HOSTS={settings.ALLOWED_HOSTS}")
+
+# CORS (ensure only added once)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOW_ORIGINS,
@@ -96,12 +102,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Trusted Host validation to prevent "Invalid Host header" while allowing container preview domains.
-# Defaults include localhost, 127.0.0.1, 0.0.0.0 and wildcard to support preview hosts.
-app.add_middleware(
-    TrustedHostMiddleware,
-    allowed_hosts=settings.ALLOWED_HOSTS,
-)
+# Trusted Host handling:
+# - If ALLOWED_HOSTS is falsy or contains '*', skip TrustedHostMiddleware to avoid Invalid Host errors in previews.
+# - Otherwise, apply TrustedHostMiddleware.
+allowed_hosts = [h.strip() for h in settings.ALLOWED_HOSTS if str(h).strip()]
+if allowed_hosts and "*" not in allowed_hosts:
+    logger.info(f"TrustedHostMiddleware enabled with allowed_hosts={allowed_hosts}")
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+else:
+    logger.warning(
+        "TrustedHostMiddleware disabled (ALLOWED_HOSTS unset/empty or includes '*'). "
+        "This is suitable for development/preview. Configure explicit hosts for production."
+    )
+
+# Lightweight middleware to log incoming host header for diagnostics
+@app.middleware("http")
+async def log_request_host(request: Request, call_next):
+    host = request.headers.get("host", "<none>")
+    logger.debug(f"Incoming request host={host}")
+    response = await call_next(request)
+    return response
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 

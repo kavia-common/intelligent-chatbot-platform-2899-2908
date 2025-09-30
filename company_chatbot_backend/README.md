@@ -21,3 +21,11 @@ Notes:
 - FAISS is optional; the app falls back to an in-memory cosine similarity.
 - DB models are provided but routes currently use in-memory storage for simplicity.
 - Migrations are not included; integrate Alembic for production.
+
+Host and CORS configuration:
+- To avoid "Invalid Host header" errors in preview or non-production environments, set:
+  ALLOWED_HOSTS=["*"] in your .env (see .env.example). When '*' is present or ALLOWED_HOSTS is unset/empty, the app disables TrustedHostMiddleware.
+- For production, set explicit hosts, e.g.:
+  ALLOWED_HOSTS=["api.example.com","localhost","127.0.0.1"]
+- The app logs the configured ALLOWED_HOSTS at startup and logs the Host header for incoming requests at debug level to aid diagnostics.
+- CORS defaults to allow all origins for previews; tighten for production.
