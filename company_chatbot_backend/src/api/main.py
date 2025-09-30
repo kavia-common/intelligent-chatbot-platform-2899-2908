@@ -4,6 +4,7 @@ from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, Depends, HTTPException, status, Path, Body
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi import APIRouter
 from pydantic import BaseModel, Field, EmailStr
@@ -36,7 +37,21 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
 
     # CORS
-    CORS_ALLOW_ORIGINS: List[str] = Field(default_factory=lambda: ["*"])
+    CORS_ALLOW_ORIGINS: List[str] = Field(
+        default_factory=lambda: ["*"],
+        description="Comma-separated origins allowed for CORS (default: *)."
+    )
+
+    # Hosts validation (Starlette TrustedHostMiddleware)
+    ALLOWED_HOSTS: List[str] = Field(
+        default_factory=lambda: [
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0",
+            "*",  # Accept preview domains in containerized environments
+        ],
+        description="List of allowed hosts for requests (TrustedHostMiddleware)."
+    )
 
     # Embeddings/LLM (simulated here)
     EMBEDDING_DIM: int = 384
@@ -79,6 +94,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Trusted Host validation to prevent "Invalid Host header" while allowing container preview domains.
+# Defaults include localhost, 127.0.0.1, 0.0.0.0 and wildcard to support preview hosts.
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=settings.ALLOWED_HOSTS,
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")

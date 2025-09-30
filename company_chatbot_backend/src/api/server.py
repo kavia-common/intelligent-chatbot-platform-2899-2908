@@ -11,8 +11,14 @@ import os
 import uvicorn
 
 
+# PUBLIC_INTERFACE
 def main() -> None:
-    """Run the FastAPI server with the configured host and port."""
+    """Run the FastAPI server with the configured host and port.
+
+    Notes:
+    - Binds to host 0.0.0.0 to accept external connections in containerized environments.
+    - PORT can be overridden via environment variable.
+    """
     port = int(os.environ.get("PORT", "3001"))
     uvicorn.run("src.api.main:app", host="0.0.0.0", port=port, reload=False)
 
