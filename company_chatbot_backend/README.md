@@ -1,10 +1,10 @@
 # Company Chatbot Backend (FastAPI)
 
 Ocean Professional themed backend providing:
-- Authentication (signup, token, me)
+- Authentication (signup, token, me) using JWT (HS256). Requires SECRET_KEY.
 - Chat with Agentic reasoning using RAG contexts and OpenAI LLM (fallback to heuristic if OpenAI not configured)
 - RAG document ingest and FAISS-like semantic search (with in-memory fallback)
-- PostgreSQL integration (SQLAlchemy) ready for persistence
+- PostgreSQL integration (SQLAlchemy) with persistence for users, chat history, and documents
 
 Run locally:
 1) Create .env from .env.example and set variables (SECRET_KEY, POSTGRES_URL, etc.)
@@ -19,8 +19,13 @@ python -m src.api.generate_openAPI
 
 Notes:
 - FAISS is optional; the app falls back to an in-memory cosine similarity.
-- DB models are provided but routes currently use in-memory storage for simplicity.
 - Migrations are not included; integrate Alembic for production.
+- Ensure your database has been initialized using assets/company_chatbot_db_schema.sql.txt.
+  The app expects tables: users, chat_messages, documents.
+
+Auth:
+- JWT tokens are created and verified using SECRET_KEY. For development without PyJWT installed, a dev token format is used automatically.
+- Never commit your SECRET_KEY. Set it via environment.
 
 OpenAI integration:
 - The backend detects OPENAI_API_KEY from environment to call OpenAI Chat Completions for RAG+Agentic responses.

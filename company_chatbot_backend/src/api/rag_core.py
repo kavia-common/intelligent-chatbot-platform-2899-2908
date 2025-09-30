@@ -1,7 +1,8 @@
-"""RAG core utilities and in-memory stores.
+"""RAG legacy utilities and theme meta.
 
-This module centralizes the FAISS/in-memory index, embeddings, and helper methods
-to avoid circular imports between main FastAPI app and lifespan hooks.
+Note:
+- The primary FAISS and embedding logic has been moved to src.services.rag_service.
+- This module preserves THEME_META for consistent styling and keeps simple in-memory fallbacks.
 """
 
 from typing import List, Dict, Any

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Text, ForeignKey
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, String, DateTime, Text, ForeignKey, LargeBinary
+
 
 from .database import Base
 
@@ -15,26 +15,21 @@ class UserModel(Base):
     password_hash = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    conversations = relationship("ConversationModel", back_populates="user")
 
-
-class ConversationModel(Base):
-    __tablename__ = "conversations"
+class ChatMessageModel(Base):
+    __tablename__ = "chat_messages"
     id = Column(String, primary_key=True, index=True)
     user_id = Column(String, ForeignKey("users.id"), nullable=False)
-    title = Column(String, nullable=True)
+    message = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    user = relationship("UserModel", back_populates="conversations")
-    messages = relationship("MessageModel", back_populates="conversation")
 
-
-class MessageModel(Base):
-    __tablename__ = "messages"
+class DocumentModel(Base):
+    __tablename__ = "documents"
     id = Column(String, primary_key=True, index=True)
-    role = Column(String, nullable=False)  # 'user' | 'assistant' | 'system'
+    title = Column(String, nullable=False)
     content = Column(Text, nullable=False)
-    session_id = Column(String, ForeignKey("conversations.id"), nullable=False)
+    # Embedding may be stored via pgvector extension as a 'vector' type. For portable fallback, we keep bytes.
+    # In production, map to pgvector via SQLAlchemy plugin or use BYTEA as done here.
+    embedding = Column(LargeBinary, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    conversation = relationship("ConversationModel", back_populates="messages")

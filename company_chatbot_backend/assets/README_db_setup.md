@@ -26,6 +26,10 @@ Requirements/Notes:
 
 Backend Environment:
 - Set POSTGRES_URL in the backend .env for SQLAlchemy (e.g., postgresql+psycopg://user:password@host:5432/company_chatbot_db)
+- ORM models:
+  - users (id, email, name, password_hash, created_at)
+  - chat_messages (id, user_id, message, created_at)
+  - documents (id, title, content, embedding BYTEA/pgvector, created_at)
 
 Security:
 - Store hashed_password as a salted hash (bcrypt/argon2 recommended). Do not store plain-text passwords.
